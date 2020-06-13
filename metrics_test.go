@@ -1,10 +1,12 @@
 package cwatsch
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	cw "github.com/aws/aws-sdk-go/service/cloudwatch"
@@ -52,20 +54,20 @@ func TestGroupingByNamespace(t *testing.T) {
 	cwAPI := cwMock{}
 	batch := New(&cwAPI)
 
-	batch.AddMetric(&cw.PutMetricDataInput{
+	batch.AddInputs(&cw.PutMetricDataInput{
 		Namespace: aws.String("namespace1"),
 		MetricData: []*cw.MetricDatum{
 			{MetricName: aws.String("namespace1 metric1")},
 		},
 	})
-	batch.AddMetric(&cw.PutMetricDataInput{
+	batch.AddInputs(&cw.PutMetricDataInput{
 		Namespace: aws.String("namespace1"),
 		MetricData: []*cw.MetricDatum{
 			{MetricName: aws.String("namespace1 metric2")},
 			{MetricName: aws.String("namespace1 metric3")},
 		},
 	})
-	batch.AddMetric(&cw.PutMetricDataInput{
+	batch.AddInputs(&cw.PutMetricDataInput{
 		Namespace: aws.String("namespace2"),
 		MetricData: []*cw.MetricDatum{
 			{MetricName: aws.String("namespace2 metric1")},
@@ -94,11 +96,7 @@ func TestBatchSizeIsLimitedBy20Items(t *testing.T) {
 	batch := New(&cwAPI)
 
 	for i := 0; i < 82; i++ {
-		batch.AddMetric(&cw.PutMetricDataInput{
-			MetricData: []*cw.MetricDatum{
-				{MetricName: aws.String(fmt.Sprintf("metric%d", i))},
-			},
-		})
+		batch.Add("", &cw.MetricDatum{MetricName: aws.String(fmt.Sprintf("metric%d", i))})
 	}
 
 	require.NoError(t, batch.Flush())
@@ -117,4 +115,45 @@ func TestBatchSizeIsLimitedBy20Items(t *testing.T) {
 			{MetricName: aws.String("metric81")},
 		},
 	}, *cwAPI.capturedPayloads[4])
+}
+
+func TestFlushIfFilled(t *testing.T) {
+	cwAPI := cwMock{}
+	batch := New(&cwAPI)
+
+	for i := 0; i < 19; i++ {
+		err := batch.Add("", &cw.MetricDatum{MetricName: aws.String(fmt.Sprintf("metric%d", i+1))}).
+			FlushIfFilled()
+		require.NoError(t, err)
+
+		assert.Len(t, cwAPI.capturedPayloads, 0, "iteration %d", i)
+	}
+
+	err := batch.Add("", &cw.MetricDatum{MetricName: aws.String("metric20")}).FlushIfFilled()
+	require.NoError(t, err)
+
+	assert.Len(t, cwAPI.capturedPayloads, 1)
+	assert.Len(t, cwAPI.capturedPayloads[0].MetricData, 20)
+}
+
+func TestAutoFlush(t *testing.T) {
+	cwAPI := cwMock{}
+	batch := New(&cwAPI, WithAutoFlush(context.TODO(), 5*time.Millisecond, func(err error) {
+		assert.NoError(t, err)
+	}))
+
+	for i := 0; i < 10; i++ {
+		err := batch.Add("", &cw.MetricDatum{MetricName: aws.String(fmt.Sprintf("metric%d", i+1))}).
+			FlushIfFilled()
+		require.NoError(t, err)
+
+		assert.Len(t, cwAPI.capturedPayloads, 0, "iteration %d", i)
+	}
+
+	assert.Len(t, cwAPI.capturedPayloads, 0)
+
+	time.Sleep(10 * time.Millisecond)
+
+	assert.Len(t, cwAPI.capturedPayloads, 1)
+	assert.Len(t, cwAPI.capturedPayloads[0].MetricData, 10)
 }
