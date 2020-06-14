@@ -123,13 +123,13 @@ func TestFlushIfFilled(t *testing.T) {
 
 	for i := 0; i < 19; i++ {
 		err := batch.Add("", &cw.MetricDatum{MetricName: aws.String(fmt.Sprintf("metric%d", i+1))}).
-			FlushIfFilled()
+			FlushCompleteBatches()
 		require.NoError(t, err)
 
 		assert.Len(t, cwAPI.capturedPayloads, 0, "iteration %d", i)
 	}
 
-	err := batch.Add("", &cw.MetricDatum{MetricName: aws.String("metric20")}).FlushIfFilled()
+	err := batch.Add("", &cw.MetricDatum{MetricName: aws.String("metric20")}).FlushCompleteBatches()
 	require.NoError(t, err)
 
 	assert.Len(t, cwAPI.capturedPayloads, 1)
@@ -138,15 +138,11 @@ func TestFlushIfFilled(t *testing.T) {
 
 func TestAutoFlush(t *testing.T) {
 	cwAPI := cwMock{}
-	batch := New(&cwAPI, WithAutoFlush(context.TODO(), 5*time.Millisecond, func(err error) {
-		assert.NoError(t, err)
-	}))
+	batch := New(&cwAPI)
+	batch.LaunchAutoFlush(context.TODO(), 5*time.Millisecond, nil)
 
 	for i := 0; i < 10; i++ {
-		err := batch.Add("", &cw.MetricDatum{MetricName: aws.String(fmt.Sprintf("metric%d", i+1))}).
-			FlushIfFilled()
-		require.NoError(t, err)
-
+		batch.Add("", &cw.MetricDatum{MetricName: aws.String(fmt.Sprintf("metric%d", i+1))})
 		assert.Len(t, cwAPI.capturedPayloads, 0, "iteration %d", i)
 	}
 

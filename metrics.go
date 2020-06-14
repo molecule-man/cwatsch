@@ -1,3 +1,11 @@
+// Package cwatsch enables sending cloudwatch metrics in batches.
+//
+// Name of the package is designed to sound similar to "Quatch" - a german word
+// for "talk nonsense". Constant chatter a child makes at the dinner table is a
+// good example of Quatch.
+//
+// The goal of the package is to reduce aws costs spent on sending custom
+// metrics.
 package cwatsch
 
 import (
@@ -16,36 +24,12 @@ type Batch struct {
 	sync.Mutex
 	cwAPI    cloudwatchiface.CloudWatchAPI
 	metricQs map[string]*queue
-
-	autoFlushCtx          context.Context
-	autoFlushTimeInterval time.Duration
-	autoFlushOnError      func(error)
 }
 
-func New(cwAPI cloudwatchiface.CloudWatchAPI, opts ...Option) *Batch {
+func New(cwAPI cloudwatchiface.CloudWatchAPI) *Batch {
 	b := &Batch{
 		cwAPI:    cwAPI,
 		metricQs: map[string]*queue{},
-	}
-
-	for _, o := range opts {
-		o(b)
-	}
-
-	if b.autoFlushTimeInterval != 0 {
-		go func() {
-			for {
-				select {
-				case <-time.After(b.autoFlushTimeInterval):
-					err := b.Flush()
-					if err != nil && b.autoFlushOnError != nil {
-						b.autoFlushOnError(err)
-					}
-				case <-b.autoFlushCtx.Done():
-					break
-				}
-			}
-		}()
 	}
 
 	return b
@@ -93,7 +77,10 @@ func (b *Batch) add(input *cw.PutMetricDataInput) {
 	}
 }
 
-func (b *Batch) FlushIfFilled() error {
+// FlushCompleteBatches flushes completed batches. The batch is completed if it
+// has exactly 20 MetricDatum items. 20 is a max number of items aws allows to
+// send in one request.
+func (b *Batch) FlushCompleteBatches() error {
 	flush := flush{cwAPI: b.cwAPI, errs: make(chan error)}
 
 	b.Lock()
@@ -107,6 +94,7 @@ func (b *Batch) FlushIfFilled() error {
 	return flush.error()
 }
 
+// Flush all the collected metrics.
 func (b *Batch) Flush() error {
 	b.Lock()
 	metricQs := b.metricQs
@@ -124,16 +112,15 @@ func (b *Batch) Flush() error {
 	return flush.error()
 }
 
-type Option func(*Batch)
-
-// WithAutoFlush configures Batch to flush metrics periodically after specified
-// period of time. It accepts context which provides means to cancel auto-flush.
-func WithAutoFlush(ctx context.Context, timeInterval time.Duration, onError func(err error)) Option {
-	return func(b *Batch) {
-		b.autoFlushCtx = ctx
-		b.autoFlushTimeInterval = timeInterval
-		b.autoFlushOnError = onError
-	}
+// LaunchAutoFlush creates a background job that auto-flushes metrics
+// periodically. onError is an optional parameter (nil can be provided).
+func (b *Batch) LaunchAutoFlush(ctx context.Context, interval time.Duration, onError func(error)) {
+	go NewTicker(ctx, interval, func() {
+		err := b.Flush()
+		if onError != nil {
+			onError(err)
+		}
+	})
 }
 
 type queue struct {
@@ -212,4 +199,15 @@ func (f *flush) error() error {
 	}
 
 	return lastErr
+}
+
+func NewTicker(ctx context.Context, interval time.Duration, fn func()) {
+	for {
+		select {
+		case <-time.After(interval):
+			fn()
+		case <-ctx.Done():
+			return
+		}
+	}
 }
