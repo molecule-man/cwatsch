@@ -1,4 +1,4 @@
-package cwatsch
+package cwatsch_test
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	cw "github.com/aws/aws-sdk-go/service/cloudwatch"
 	"github.com/aws/aws-sdk-go/service/cloudwatch/cloudwatchiface"
+	"github.com/molecule-man/cwatsch"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,6 +21,8 @@ type cwMock struct {
 	sync.Mutex
 	capturedPayloads []*cw.PutMetricDataInput
 }
+
+var cwAPI = cwMock{}
 
 func (mock *cwMock) PutMetricData(input *cw.PutMetricDataInput) (*cw.PutMetricDataOutput, error) {
 	mock.Lock()
@@ -52,7 +55,7 @@ func sortBySize(payloads []*cw.PutMetricDataInput) []*cw.PutMetricDataInput {
 
 func TestGroupingByNamespace(t *testing.T) {
 	cwAPI := cwMock{}
-	batch := New(&cwAPI)
+	batch := cwatsch.New(&cwAPI)
 
 	batch.AddInputs(&cw.PutMetricDataInput{
 		Namespace: aws.String("namespace1"),
@@ -93,7 +96,7 @@ func TestGroupingByNamespace(t *testing.T) {
 
 func TestBatchSizeIsLimitedBy20Items(t *testing.T) {
 	cwAPI := cwMock{}
-	batch := New(&cwAPI)
+	batch := cwatsch.New(&cwAPI)
 
 	for i := 0; i < 82; i++ {
 		batch.Add("", &cw.MetricDatum{MetricName: aws.String(fmt.Sprintf("metric%d", i))})
@@ -119,7 +122,7 @@ func TestBatchSizeIsLimitedBy20Items(t *testing.T) {
 
 func TestFlushIfFilled(t *testing.T) {
 	cwAPI := cwMock{}
-	batch := New(&cwAPI)
+	batch := cwatsch.New(&cwAPI)
 
 	for i := 0; i < 19; i++ {
 		err := batch.Add("", &cw.MetricDatum{MetricName: aws.String(fmt.Sprintf("metric%d", i+1))}).
@@ -138,7 +141,7 @@ func TestFlushIfFilled(t *testing.T) {
 
 func TestAutoFlush(t *testing.T) {
 	cwAPI := cwMock{}
-	batch := New(&cwAPI)
+	batch := cwatsch.New(&cwAPI)
 	batch.LaunchAutoFlush(context.TODO(), 5*time.Millisecond, nil)
 
 	for i := 0; i < 10; i++ {
