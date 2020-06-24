@@ -16,11 +16,11 @@ func ExampleNew() {
 		m := gometrics.New(session.Must(session.NewSession()))
 		m.Namespace = "MyApp"
 		m.CollectHeapAlloc = true
-		m.CollectNextGC = true
-		m.CollectStackInuse = true
-		m.CollectPauseTotalNs = true
-		m.CollectNumGC = true
-		m.CollectHeapObjects = true
+		m.CollectNextGC = true       // target heap size of the next GC cycle
+		m.CollectStackInuse = true   // bytes in stack spans.
+		m.CollectPauseTotalNs = true // cumulative nanoseconds in GC stop-the-world pauses since the program started.
+		m.CollectNumGC = true        // number of completed GC cycles.
+		m.CollectHeapObjects = true  // number of allocated heap objects.
 		m.CollectNumGoroutine = true
 
 		// the metrics will be collected every minute
