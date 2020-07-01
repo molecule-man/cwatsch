@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	cw "github.com/aws/aws-sdk-go/service/cloudwatch"
 	"github.com/aws/aws-sdk-go/service/cloudwatch/cloudwatchiface"
+	"golang.org/x/sync/errgroup"
 )
 
 const maxBatchSize = 20
@@ -81,42 +82,52 @@ func (b *Batch) add(input *cw.PutMetricDataInput) {
 // has exactly 20 MetricDatum items. 20 is a max number of items aws allows to
 // send in one request.
 func (b *Batch) FlushCompleteBatches() error {
-	flush := flush{cwAPI: b.cwAPI, errs: make(chan error)}
+	return b.FlushCompleteBatchesCtx(context.Background())
+}
+
+func (b *Batch) FlushCompleteBatchesCtx(ctx context.Context) error {
+	errGroup, ctx := errgroup.WithContext(ctx)
+	flush := flush{cwAPI: b.cwAPI, errGroup: errGroup}
 
 	b.Lock()
 	for ns, q := range b.metricQs {
 		for q.count >= maxBatchSize {
-			flush.do(ns, q.top(maxBatchSize))
+			flush.do(ctx, ns, q.top(maxBatchSize))
 		}
 	}
 	b.Unlock()
 
-	return flush.error()
+	return flush.wait()
 }
 
 // Flush all the collected metrics.
 func (b *Batch) Flush() error {
+	return b.FlushCtx(context.Background())
+}
+
+func (b *Batch) FlushCtx(ctx context.Context) error {
 	b.Lock()
 	metricQs := b.metricQs
 	b.metricQs = map[string]*queue{}
 	b.Unlock()
 
-	flush := flush{cwAPI: b.cwAPI, errs: make(chan error)}
+	errGroup, ctx := errgroup.WithContext(ctx)
+	flush := flush{cwAPI: b.cwAPI, errGroup: errGroup}
 
 	for ns, q := range metricQs {
 		for q.count > 0 {
-			flush.do(ns, q.top(maxBatchSize))
+			flush.do(ctx, ns, q.top(maxBatchSize))
 		}
 	}
 
-	return flush.error()
+	return flush.wait()
 }
 
 // LaunchAutoFlush creates a background job that auto-flushes metrics
 // periodically. onError is an optional parameter (nil can be provided).
 func (b *Batch) LaunchAutoFlush(ctx context.Context, interval time.Duration, onError func(error)) {
 	go NewTicker(ctx, interval, func() {
-		err := b.Flush()
+		err := b.FlushCtx(ctx)
 		if onError != nil {
 			onError(err)
 		}
@@ -173,32 +184,22 @@ func (q *queue) top(n int) []*cw.MetricDatum {
 }
 
 type flush struct {
-	cwAPI     cloudwatchiface.CloudWatchAPI
-	errs      chan error
-	execCount int
+	cwAPI    cloudwatchiface.CloudWatchAPI
+	errGroup *errgroup.Group
 }
 
-func (f *flush) do(ns string, batch []*cw.MetricDatum) {
-	go func(ns string, batch []*cw.MetricDatum) {
-		_, err := f.cwAPI.PutMetricData(&cw.PutMetricDataInput{
+func (f *flush) do(ctx context.Context, ns string, batch []*cw.MetricDatum) {
+	f.errGroup.Go(func() error {
+		_, err := f.cwAPI.PutMetricDataWithContext(ctx, &cw.PutMetricDataInput{
 			Namespace:  aws.String(ns),
 			MetricData: batch,
 		})
-		f.errs <- err
-	}(ns, batch)
-	f.execCount++
+		return err
+	})
 }
 
-func (f *flush) error() error {
-	var lastErr error
-
-	for i := 0; i < f.execCount; i++ {
-		if err := <-f.errs; err != nil {
-			lastErr = err
-		}
-	}
-
-	return lastErr
+func (f *flush) wait() error {
+	return f.errGroup.Wait()
 }
 
 func NewTicker(ctx context.Context, interval time.Duration, fn func()) {

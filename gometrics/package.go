@@ -98,7 +98,7 @@ func (m *GoMetrics) Launch(ctx context.Context, interval time.Duration) {
 		m.add(m.CollectGCCPUFraction, "GCCPUFraction", 100.0*stats.GCCPUFraction, cloudwatch.StandardUnitPercent)
 		m.add(m.CollectNumGoroutine, "NumGoroutine", float64(runtime.NumGoroutine()), cloudwatch.StandardUnitCount)
 
-		err := m.batch.FlushCompleteBatches()
+		err := m.batch.FlushCompleteBatchesCtx(ctx)
 		if err != nil && m.OnError != nil {
 			m.OnError(err)
 		}

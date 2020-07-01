@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/request"
 	cw "github.com/aws/aws-sdk-go/service/cloudwatch"
 	"github.com/aws/aws-sdk-go/service/cloudwatch/cloudwatchiface"
 	"github.com/molecule-man/cwatsch"
@@ -24,7 +25,9 @@ type cwMock struct {
 
 var cwAPI = cwMock{}
 
-func (mock *cwMock) PutMetricData(input *cw.PutMetricDataInput) (*cw.PutMetricDataOutput, error) {
+func (mock *cwMock) PutMetricDataWithContext(
+	_ aws.Context, input *cw.PutMetricDataInput, _ ...request.Option,
+) (*cw.PutMetricDataOutput, error) {
 	mock.Lock()
 	defer mock.Unlock()
 
